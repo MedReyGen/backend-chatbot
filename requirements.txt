@@ -1,4 +1,7 @@
+# filepath: c:\Users\62851\OneDrive\Documents\GitHub\backend-chatbot\requirements.txt
 Flask==2.0.1
+Werkzeug==2.0.3
 google-cloud-aiplatform>=1.36.0
 python-dotenv==0.19.0
 flask-cors==3.0.10
+gunicorn==23.0.0
