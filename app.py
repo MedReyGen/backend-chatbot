@@ -22,7 +22,7 @@ SI_TEXT = (
     "pneumonia, tuberkulosis (TBC), dan COVID-19. tidak bisa menjawab penyakit lainnya."
 )
 
-MODEL = "gemini-2.5-pro-preview-05-06"
+MODEL = "gemini-2.5-flash-lite"
 
 COMMON_CONFIG = dict(
     temperature=1,
