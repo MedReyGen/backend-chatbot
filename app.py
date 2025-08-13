@@ -88,7 +88,6 @@ def generate_stream():
 
     def event_stream():
         for chunk in stream:
-            # text_delta = "".join(part.text for part in chunk.choices[0].delta.parts)
             if chunk.text:
                 yield chunk.text
 

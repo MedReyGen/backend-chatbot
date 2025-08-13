@@ -1,0 +1,16 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+env/
+venv/
+ENV/
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
