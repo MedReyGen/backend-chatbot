@@ -1,102 +1,101 @@
-from flask import Flask, request, Response, jsonify
-from google import genai
-from google.genai import types
+from flask import Flask, request, jsonify, Response
 import os
 from dotenv import load_dotenv
+from openai import OpenAI
+import json
+import logging
 from flask_cors import CORS
 
+# Setup logging untuk production
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
-
 app = Flask(__name__)
-CORS(app)
 
-client = genai.Client(
-    vertexai=True,
-    project=os.getenv("PROJECT_ID"),
-    location=os.getenv("LOCATION"),
+# Enable CORS untuk production
+CORS(app, origins=["*"])  # Sesuaikan dengan domain frontend Anda
+
+client = OpenAI(
+    base_url="https://router.huggingface.co/v1",
+    api_key=os.getenv("HF_TOKEN"),
 )
 
-SI_TEXT = (
-    "anda adalah asisten virtual dalam memberikan informasi, saran medis awal, "
-    "dan panduan lanjutan kepada pengguna untuk penyakit pernafasan seperti "
-    "pneumonia, tuberkulosis (TBC), dan COVID-19. tidak bisa menjawab penyakit lainnya."
-)
-
-MODEL = "gemini-2.5-flash-lite"
-
-COMMON_CONFIG = dict(
-    temperature=1,
-    top_p=0.88,
-    seed=0,
-    max_output_tokens=3000,
-    safety_settings=[
-        types.SafetySetting(
-            category="HARM_CATEGORY_HATE_SPEECH", 
-            threshold="OFF"
-        ), types.SafetySetting(
-            category="HARM_CATEGORY_DANGEROUS_CONTENT", 
-            threshold="OFF"
-        ), types.SafetySetting(
-            category="HARM_CATEGORY_SEXUALLY_EXPLICIT", 
-            threshold="OFF"
-        ), types.SafetySetting(
-            category="HARM_CATEGORY_HARASSMENT", 
-            threshold="OFF"
-        ),
-    ],
-    system_instruction=[types.Part.from_text(text=SI_TEXT)],
-)
-
-def build_contents(user_query):
-    if not user_query:
-        return jsonify({"error": "No query provided"}), 400
-    
-    if isinstance(user_query, list) and all(isinstance(m, dict) and "content" in m for m in user_query):
-        contents = []
-        for message in user_query:
-            role = message.get("role", "user")
-            text = message.get("content", "")
-            contents.append(types.Content(
-                role=role,
-                parts=[types.Part.from_text(text=text)]
-            ))
-        return contents
-    elif isinstance(user_query, str):
-        return [types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=user_query)]
-        )]
-    else:
-        raise ValueError("Invalid query format: must be string or list of {role,content} dicts")
+# System prompt untuk chatbot medis
+SYSTEM_PROMPT = """Anda adalah asisten virtual dalam memberikan informasi, saran medis awal, dan panduan lanjutan kepada pengguna untuk penyakit pernafasan seperti pneumonia, tuberkulosis (TBC), dan COVID-19. Tidak bisa menjawab penyakit lainnya."""
 
 @app.route('/generate-stream', methods=['POST'])
 def generate_stream():
-    data = request.json or {}
-    user_query = data.get('query', [])
     try:
-        contents = build_contents(user_query)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid JSON'}), 400
+            
+        user_message = data.get('message', '')
+        
+        if not user_message or user_message.strip() == '':
+            return jsonify({'error': 'Message is required'}), 400
+        
+        # Log request untuk monitoring
+        logger.info(f"Received message: {user_message[:100]}...")
+        
+        def generate():
+            try:
+                stream = client.chat.completions.create(
+                    model="deepseek-ai/DeepSeek-V3.1-Terminus:novita",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_message}
+                    ],
+                    stream=True,
+                    max_tokens=3000,
+                    temperature=0.88,
+                    top_p=1,
+                )
+                
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        yield f"data: {json.dumps({'content': chunk.choices[0].delta.content})}\n\n"
+                
+                yield f"data: {json.dumps({'done': True})}\n\n"
+            except Exception as e:
+                logger.error(f"Error in stream generation: {str(e)}")
+                yield f"data: {json.dumps({'error': 'Internal server error'})}\n\n"
+        
+        return Response(
+            generate(), 
+            mimetype='text/plain',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*'
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in generate_stream: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
-    config = types.GenerateContentConfig(**COMMON_CONFIG)
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': os.environ.get('TIMESTAMP', 'unknown')
+    })
 
-    stream = client.models.generate_content_stream(
-        model=MODEL,
-        contents=contents,
-        config=config,
-    )
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
 
-    def event_stream():
-        for chunk in stream:
-            if chunk.text:
-                yield chunk.text
-
-    return Response(
-        event_stream(),
-        mimetype='text/plain; charset=utf-8',
-        headers={"Transfer-Encoding": "chunked"}
-    )
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error: {str(error)}")
+    return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    app.run(debug=debug_mode, host='0.0.0.0', port=port)
